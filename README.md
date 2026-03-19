@@ -4,12 +4,14 @@
 
 # ThorCPY Linux
 
-**ThorCPYLinux** is a Linux-optimised fork of [ThorCPY](https://github.com/theswest/ThorCPY) — a multi-window Scrcpy launcher designed for the **AYN Thor** handheld.
+> **This is a Linux fork of [ThorCPY](https://github.com/theswest/ThorCPY) by [the_swest](https://github.com/theswest).
+> All credit for the original project goes to [theswest](https://github.com/theswest).
+> For the Windows version, see the [upstream repository](https://github.com/theswest/ThorCPY).**
+
+**ThorCPY Linux** is a Linux-optimised fork of [ThorCPY](https://github.com/theswest/ThorCPY) — a multi-window Scrcpy launcher designed for the **AYN Thor** handheld.
 
 It launches two scrcpy windows (one per display), supports window docking on X11, and provides wireless ADB connection support.
 Designed for screensharing, recording or livestreaming.
-
-> **This fork is maintained separately for Linux. For Windows, see the [original ThorCPY](https://github.com/theswest/ThorCPY).**
 
 | Main UI                             | ThorCPY Screenshot                             |
 |-------------------------------------|------------------------------------------------|
@@ -94,7 +96,7 @@ Before connecting your AYN Thor:
 
 ```bash
 # 1. Clone the repository
-git clone https://codeberg.org/SkyfaR/ThorCPYLinux.git
+git clone https://github.com/DrSkyfaR/ThorCPY-Linux.git
 cd ThorCPYLinux
 
 # 2. Install system dependencies (see Requirements above)
@@ -319,8 +321,8 @@ On Linux, **system-installed packages are preferred** — the `bin/` folder is o
 
 Contributions are welcome! This is a Linux-specific fork maintained separately.
 
-- For Linux-specific bugs or features: open an issue on [Codeberg](https://codeberg.org/SkyfaR/ThorCPYLinux/issues)
-- For general ThorCPY issues: see the [upstream repository](https://github.com/theswest/ThorCPY/issues)
+- For Linux-specific bugs or features: open an issue in **this repository** on [GitHub](https://github.com/DrSkyfaR/ThorCPY-Linux/issues)
+- For general ThorCPY issues (Windows / upstream): see the [upstream repository](https://github.com/theswest/ThorCPY/issues)
 
 ---
 
