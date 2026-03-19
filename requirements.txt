@@ -1,0 +1,4 @@
+pygame>=2.6.0
+pyinstaller>=6.0.0
+pywin32-ctypes>=0.2.0; sys_platform == 'win32'
+python-xlib>=0.33; sys_platform == 'linux'
