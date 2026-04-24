@@ -119,8 +119,12 @@ class Launcher:
         self.swap_screens = self.config.get("swap_screens", False)
         logger.info(f"Swap Screens: {self.swap_screens}")
 
+        # Load Discord audio routing preference (Linux only — harmless to store on any OS)
+        discord_audio_routing = self.config.get("discord_audio_routing", True)
+
         # Initialize Scrcpy with the saved scale
-        self.scrcpy = ScrcpyManager(scale=self.launch_scale)
+        self.scrcpy = ScrcpyManager(scale=self.launch_scale,
+                                    discord_audio_routing=discord_audio_routing)
 
         # Calculate the forced layout (Top at 0,0 - bottom centred underneath) with scaled dimensions
         w1, h1 = self.scrcpy.f_w1, self.scrcpy.f_h1

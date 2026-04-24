@@ -84,6 +84,13 @@ TOP_SCREEN_WINDOW_TITLE = "ThorCPY Top Screen"
 BOTTOM_SCREEN_DISPLAY_ID = "4"
 BOTTOM_SCREEN_WINDOW_TITLE = "ThorCPY Bottom Screen"
 
+# PipeWire/PulseAudio virtual device names for Discord audio routing (Linux only)
+GAME_SINK_NAME = "thorcpy_game"
+GAME_SINK_DESCRIPTION = "ThorCPY_Game"
+COMBINED_SINK_NAME = "thorcpy_mic"
+COMBINED_SINK_DESCRIPTION = "ThorCPY_Discord_Mic"
+AUDIO_LOOPBACK_LATENCY_MS = 100
+
 # Timing delays for process management
 DISPLAY_INIT_DELAY = 1.2  # Wait for first display to initialize
 SCRCPY_CREATION_DELAY = 0.3  # Check if process survives startup
@@ -93,6 +100,161 @@ SCRCPY_RETRY_DELAY = 0.7  # Wait between retry attempts
 PROCESS_TERMINATE_TIMEOUT = 2
 SCRCPY_TERMINATE_TIMEOUT = 3
 
+class AudioRouter:
+    """
+    Routes scrcpy audio through PipeWire/PulseAudio so that:
+      - Audio plays locally through speakers (loopback to default sink)
+      - Discord captures it automatically without any Discord settings change
+
+    Graph built on setup():
+      scrcpy → GAME_SINK ──► speakers          (local playback)
+                         └──► COMBINED_SINK ◄── real microphone
+                                    │
+                               default source  ← Discord reads this automatically
+
+    On teardown() the original default source is restored and all modules are removed.
+    """
+
+    def __init__(self):
+        self._module_ids = []
+        self._original_default_source = None
+        self._active = False
+
+    @staticmethod
+    def is_supported():
+        return sys.platform == "linux" and shutil.which("pactl") is not None
+
+    def _get_default_source(self):
+        try:
+            result = subprocess.run(["pactl", "info"], capture_output=True, text=True, timeout=5)
+            for line in result.stdout.splitlines():
+                if line.startswith("Default Source:"):
+                    return line.split(":", 1)[1].strip()
+        except Exception as e:
+            logger.warning(f"Could not read default source: {e}")
+        return None
+
+    def _load_null_sink(self, name, description):
+        """Create a null-sink, store module ID, return ID or None on failure."""
+        result = subprocess.run(
+            [
+                "pactl", "load-module", "module-null-sink",
+                f"sink_name={name}",
+                f"sink_properties=device.description={description}",
+            ],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            logger.error(f"Failed to create sink '{name}': {result.stderr.strip()}")
+            return None
+        mod_id = result.stdout.strip()
+        self._module_ids.append(mod_id)
+        logger.info(f"Null sink '{name}' created (module {mod_id})")
+        return mod_id
+
+    def _load_loopback(self, source, sink):
+        """Create a loopback module, store module ID, return ID or None on failure."""
+        result = subprocess.run(
+            [
+                "pactl", "load-module", "module-loopback",
+                f"source={source}",
+                f"sink={sink}",
+                f"latency_msec={AUDIO_LOOPBACK_LATENCY_MS}",
+            ],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            logger.warning(f"Loopback {source}→{sink} failed: {result.stderr.strip()}")
+            return None
+        mod_id = result.stdout.strip()
+        self._module_ids.append(mod_id)
+        logger.info(f"Loopback {source}→{sink} (module {mod_id})")
+        return mod_id
+
+    def setup(self):
+        """
+        Build the routing graph.
+        Returns an env dict for scrcpy (PULSE_SINK + SDL_AUDIODRIVER), or None on failure.
+        """
+        if not self.is_supported():
+            logger.warning("Audio routing unavailable: pactl not found")
+            return None
+        if self._active:
+            return {"PULSE_SINK": GAME_SINK_NAME, "SDL_AUDIODRIVER": "pulseaudio"}
+
+        try:
+            self._original_default_source = self._get_default_source()
+            logger.info(f"Saving default source: {self._original_default_source}")
+
+            # 1. Game sink — scrcpy outputs here
+            if not self._load_null_sink(GAME_SINK_NAME, GAME_SINK_DESCRIPTION):
+                return None
+
+            # 2. Game audio → speakers (local playback)
+            self._load_loopback(f"{GAME_SINK_NAME}.monitor", "@DEFAULT_SINK@")
+
+            # 3. Combined sink — mic + game mixed together
+            if not self._load_null_sink(COMBINED_SINK_NAME, COMBINED_SINK_DESCRIPTION):
+                return None
+
+            # 4. Real microphone → combined (voice is preserved in Discord)
+            if self._original_default_source and ".monitor" not in self._original_default_source:
+                self._load_loopback(self._original_default_source, COMBINED_SINK_NAME)
+
+            # 5. Game audio → combined (Discord also captures game audio)
+            self._load_loopback(f"{GAME_SINK_NAME}.monitor", COMBINED_SINK_NAME)
+
+            # 6. Set combined.monitor as default source — Discord picks it up automatically
+            result = subprocess.run(
+                ["pactl", "set-default-source", f"{COMBINED_SINK_NAME}.monitor"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:
+                logger.warning(f"Could not set default source: {result.stderr.strip()}")
+            else:
+                logger.info(f"Default source → {COMBINED_SINK_NAME}.monitor (Discord auto-captures)")
+
+            self._active = True
+            # SDL_AUDIODRIVER=pulseaudio forces SDL to use the PulseAudio compat layer
+            # so PULSE_SINK is honoured even on PipeWire
+            return {"PULSE_SINK": GAME_SINK_NAME, "SDL_AUDIODRIVER": "pulseaudio"}
+
+        except subprocess.TimeoutExpired:
+            logger.error("Timeout during audio routing setup")
+            self.teardown()
+            return None
+        except Exception as e:
+            logger.error(f"Error setting up audio routing: {e}")
+            self.teardown()
+            return None
+
+    def teardown(self):
+        """Restore original default source and remove all created PipeWire modules."""
+        if self._original_default_source:
+            try:
+                subprocess.run(
+                    ["pactl", "set-default-source", self._original_default_source],
+                    capture_output=True, timeout=5,
+                )
+                logger.info(f"Restored default source: {self._original_default_source}")
+            except Exception as e:
+                logger.warning(f"Failed to restore default source: {e}")
+
+        for mod_id in reversed(self._module_ids):
+            try:
+                subprocess.run(
+                    ["pactl", "unload-module", mod_id],
+                    capture_output=True, timeout=5,
+                )
+                logger.info(f"Unloaded module {mod_id}")
+            except Exception as e:
+                logger.warning(f"Failed to unload module {mod_id}: {e}")
+
+        self._module_ids = []
+        self._original_default_source = None
+        self._active = False
+
+
 # Main ScrcpyManager class
 class ScrcpyManager:
     """
@@ -100,7 +262,8 @@ class ScrcpyManager:
     Handles device detection, window launching, scaling, resolution and process management and shutdown
     """
 
-    def __init__(self, scale=DEFAULT_UI_SCALING, scrcpy_bin=None, adb_bin=None, enable_audio_top=True):
+    def __init__(self, scale=DEFAULT_UI_SCALING, scrcpy_bin=None, adb_bin=None,
+                 enable_audio_top=True, discord_audio_routing=True):
         """
         Initialize the scrcpy manager.
 
@@ -109,14 +272,20 @@ class ScrcpyManager:
             scrcpy_bin: optional custom path to scrcpy binary
             adb_bin: optional custom path to adb binary
             enable_audio_top: if True, enable audio on top window
+            discord_audio_routing: if True (Linux only), route audio through a virtual
+                PipeWire sink so Discord screen-share can capture it
         """
-        logger.info(f"Initializing ScrcpyManager (scale={scale}, audio={enable_audio_top})")
+        logger.info(f"Initializing ScrcpyManager (scale={scale}, audio={enable_audio_top}, "
+                    f"discord_audio_routing={discord_audio_routing})")
 
         self.scale = scale
         self.processes = [] # Track all scrcpy subprocess instances
         self._log_files = []  # Track open log file handles
         self.serial = None
         self.enable_audio_top = enable_audio_top
+
+        # Audio routing for Discord screen-share (Linux only)
+        self._audio_router = AudioRouter() if (discord_audio_routing and sys.platform == "linux") else None
 
         # Calculate top screen resolution based on scale
         base_w1 = TOP_SCREEN_BASE_WIDTH
@@ -634,6 +803,14 @@ class ScrcpyManager:
         if len(displays) == 1:
              logger.warning("Only one display detected. Dual screen mode might not work as expected.")
 
+        # Set up PipeWire audio routing: game audio → speakers + Discord auto-capture
+        scrcpy_env = None
+        if self._audio_router:
+            env_additions = self._audio_router.setup()
+            if env_additions:
+                scrcpy_env = {**os.environ, **env_additions}
+                logger.info(f"Discord audio routing active ({env_additions})")
+
         # Base arguments (no --max-fps here — set per window below)
         base = [
             self.scrcpy_bin,
@@ -685,7 +862,7 @@ class ScrcpyManager:
         # Start top screen first
         logger.info(f"Starting TOP window ({TOP_SCREEN_WINDOW_TITLE}) on Display {top_id}")
         logger.debug(f"Top window command: {' '.join(top_args)}")
-        p0 = self._start_with_retry(top_args, "top")
+        p0 = self._start_with_retry(top_args, "top", env=scrcpy_env)
 
         # Bottom window logic
         if bottom_id and bottom_id != top_id:
@@ -715,7 +892,7 @@ class ScrcpyManager:
             # Start bottom screen
             logger.info(f"Starting BOTTOM window ({BOTTOM_SCREEN_WINDOW_TITLE}) on Display {bottom_id}")
             logger.debug(f"Bottom window command: {' '.join(bottom_args)}")
-            p1 = self._start_with_retry(bottom_args, "bottom")
+            p1 = self._start_with_retry(bottom_args, "bottom", env=scrcpy_env)
             
             return [p for p in [p0, p1] if p]
         
@@ -723,7 +900,7 @@ class ScrcpyManager:
              logger.info("Skipping bottom window (only 1 display found or same ID)")
              return [p0] if p0 else []
 
-    def _start_with_retry(self, cmd, label):
+    def _start_with_retry(self, cmd, label, env=None):
         """
         Start a process and retry on failure.
         Logs to ./logs/ if possible.
@@ -731,6 +908,7 @@ class ScrcpyManager:
         Args:
             cmd: Command list to execute
             label: Label for logging (e.g., "top" or "bottom")
+            env: Optional environment dict for the subprocess
 
         Returns:
             Popen instance
@@ -771,7 +949,9 @@ class ScrcpyManager:
                 kwargs = {}
                 if sys.platform == "win32":
                     kwargs['creationflags'] = CREATE_NO_WINDOW
-                
+                if env is not None:
+                    kwargs['env'] = env
+
                 proc = subprocess.Popen(cmd, stdout=stdout, stderr=stderr, **kwargs)
 
                 # Verify process didn't instantly crash
@@ -829,6 +1009,10 @@ class ScrcpyManager:
         logger.info("=" * LOG_MULT)
         logger.info("Stopping ScrcpyManager")
         logger.info("=" * LOG_MULT)
+
+        # Tear down audio routing before killing processes
+        if self._audio_router:
+            self._audio_router.teardown()
 
         if not self.processes:
             logger.info("No scrcpy processes to stop")
