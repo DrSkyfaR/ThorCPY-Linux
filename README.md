@@ -97,7 +97,7 @@ Before connecting your AYN Thor:
 ```bash
 # 1. Clone the repository
 git clone https://github.com/DrSkyfaR/ThorCPY-Linux.git
-cd ThorCPYLinux
+cd ThorCPY-Linux/
 
 # 2. Install system dependencies (see Requirements above)
 
