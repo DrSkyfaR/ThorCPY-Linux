@@ -74,3 +74,44 @@ def grab_region_png(left, top, width, height, path):
     except Exception as e:
         logger.error(f"grab_region_png failed: {e}")
         return False
+
+
+def grab_x11_window_png(window_id, path):
+    """Capture an X11 window directly to a PNG file.
+
+    This is more reliable than screen-region capture on some WMs because it
+    reads the window's own pixels instead of the compositor output.
+    """
+    if not window_id:
+        return False
+
+    try:
+        from Xlib import X, display
+        from PIL import Image
+
+        disp = display.Display()
+        win = disp.create_resource_object("window", int(window_id))
+        geom = win.get_geometry()
+        width = int(geom.width)
+        height = int(geom.height)
+        if width <= 0 or height <= 0:
+            logger.error(f"grab_x11_window_png: invalid size {width}x{height}")
+            return False
+
+        raw = win.get_image(0, 0, width, height, X.ZPixmap, 0xFFFFFFFF)
+        data = raw.data
+        if not data:
+            logger.error("grab_x11_window_png: empty image data")
+            return False
+
+        if len(data) >= width * height * 4:
+            image = Image.frombytes("RGBA", (width, height), data, "raw", "BGRA")
+        else:
+            image = Image.frombytes("RGB", (width, height), data, "raw", "BGR")
+
+        image.save(path)
+        logger.info(f"Saved X11 window screenshot -> {path}")
+        return True
+    except Exception as e:
+        logger.error(f"grab_x11_window_png failed: {e}")
+        return False

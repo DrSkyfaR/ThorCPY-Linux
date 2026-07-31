@@ -26,7 +26,10 @@ import tkinter as tk
 import customtkinter as ctk
 from PIL import Image
 
-from src.platform_compat import apply_dark_titlebar, set_clipboard_text, grab_region_png
+from src.platform_compat import (
+    apply_dark_titlebar, set_clipboard_text,
+    grab_region_png, grab_x11_window_png,
+)
 from src.ui_constants import (
     BG_COLOUR, PANEL_COLOUR, BORDER_COLOUR, TEXT_COLOUR,
     ACCENT_COLOUR, ACCENT2_COLOUR, TOP_COLOUR, BOTTOM_COLOUR,
@@ -865,17 +868,26 @@ class CTkUI:
     def take_screenshot(self):
         """Capture the docked scrcpy region to a PNG file (mss, cross-platform)."""
         try:
+            container_id = getattr(self.l, "hwnd_container", None)
             geom = self.l.get_capture_region()
-            if not geom:
+            if not geom and not container_id:
                 self.show_status("Screenshot needs docked windows", "error")
                 return
-            left, top, width, height = geom
 
             os.makedirs("screenshots", exist_ok=True)
             path = os.path.join("screenshots", f"dualcpy_{time.strftime('%Y%m%d_%H%M%S')}.png")
-            logger.info(f"Capturing region {left},{top} {width}x{height} -> {path}")
 
-            if grab_region_png(left, top, width, height, path):
+            captured = False
+            if container_id and sys.platform != "win32":
+                logger.info(f"Capturing X11 container window {container_id} -> {path}")
+                captured = grab_x11_window_png(container_id, path)
+
+            if not captured and geom:
+                left, top, width, height = geom
+                logger.info(f"Capturing region {left},{top} {width}x{height} -> {path}")
+                captured = grab_region_png(left, top, width, height, path)
+
+            if captured:
                 self.show_status(f"Screenshot saved: {path}", "success")
             else:
                 self.show_status("Screenshot failed", "error")
