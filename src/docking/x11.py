@@ -88,6 +88,28 @@ class X11DockManager(DockManager):
         except Exception:
             return None
 
+    def _find_window_in_tree(self, window, title):
+        """Recursively search the X11 window tree for a matching title."""
+        try:
+            name = self._get_window_name(window)
+            if name and title.lower() in name.lower():
+                logger.info(f"Found window '{name}' with ID {window.id}")
+                return window.id
+
+            try:
+                children = window.query_tree().children
+            except Exception:
+                return None
+
+            for child in children:
+                found = self._find_window_in_tree(child, title)
+                if found:
+                    return found
+        except Exception:
+            return None
+
+        return None
+
     def find_window(self, title):
         """
         Find a window by title.
@@ -109,10 +131,8 @@ class X11DockManager(DockManager):
                     except Exception:
                         continue
             
-            # Fallback: Tree traversal (expensive, but necessary if no client list)
-            # Implemented simplified recursive search if needed, but client list usually works.
-            logger.debug(f"Window '{title}' not found in _NET_CLIENT_LIST")
-            return None
+            logger.debug(f"Window '{title}' not found in _NET_CLIENT_LIST, falling back to tree traversal")
+            return self._find_window_in_tree(self.root, title)
 
         except Exception as e:
             logger.error(f"Error finding window: {e}")
