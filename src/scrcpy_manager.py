@@ -78,6 +78,7 @@ LOGFILE_ENCODING = "utf-8"
 # Scrcpy default parameters
 DEFAULT_MAX_FPS = "120"
 DEFAULT_RENDER_DRIVER = "opengl"
+XWAYLAND_RENDER_DRIVER = "software"
 DEFAULT_VIDEO_CODEC = "h264"
 
 # MediaCodec encoder tuning passed via --video-codec-options. These bias the
@@ -112,6 +113,32 @@ GAME_SINK_DESCRIPTION = "DualCPY_Game"
 COMBINED_SINK_NAME = "dualcpy_mic"
 COMBINED_SINK_DESCRIPTION = "DualCPY_Discord_Mic"
 AUDIO_LOOPBACK_LATENCY_MS = 100
+
+
+def select_render_driver(
+    platform_name=None,
+    session_type=None,
+    display=None,
+    video_driver=None,
+):
+    """Avoid GLX surface corruption for reparented windows under XWayland."""
+    if platform_name is None:
+        platform_name = sys.platform
+    if session_type is None:
+        session_type = os.environ.get("XDG_SESSION_TYPE")
+    if display is None:
+        display = os.environ.get("DISPLAY")
+    if video_driver is None:
+        video_driver = os.environ.get("SDL_VIDEODRIVER")
+    if (
+        platform_name == "linux"
+        and session_type == "wayland"
+        and display
+        and video_driver == "x11"
+    ):
+        return XWAYLAND_RENDER_DRIVER
+    return DEFAULT_RENDER_DRIVER
+
 
 # Timing delays for process management
 DISPLAY_INIT_DELAY = 1.2  # Wait for first display to initialize
@@ -888,12 +915,14 @@ class ScrcpyManager:
 
         # Base arguments (no --max-fps here — set per window below).
         # Codec tuning + low-latency flags are shared by both windows.
+        render_driver = select_render_driver()
+        logger.info(f"Scrcpy render driver: {render_driver}")
         base = [
             self.scrcpy_bin,
             "-s",
             self.serial,
             "--render-driver",
-            DEFAULT_RENDER_DRIVER,
+            render_driver,
             "--video-codec",
             DEFAULT_VIDEO_CODEC,
             f"--video-codec-options={SCRCPY_CODEC_OPTIONS}",

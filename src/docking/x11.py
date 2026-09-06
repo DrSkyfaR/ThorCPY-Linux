@@ -6,6 +6,10 @@ import time
 
 logger = logging.getLogger(__name__)
 
+RESIZE_SETTLE_SECONDS = 0.1
+LAYOUT_CHECK_SECONDS = 0.25
+
+
 class X11DockManager(DockManager):
     """
     Linux X11 implementation of the DockManager.
@@ -13,6 +17,10 @@ class X11DockManager(DockManager):
     """
     def __init__(self):
         super().__init__()
+        self._container_size = None
+        self._pending_container_size = None
+        self._container_resize_deadline = 0.0
+        self._next_layout_check = 0.0
         try:
             self.disp = display.Display()
             self.root = self.disp.screen().root
@@ -42,6 +50,8 @@ class X11DockManager(DockManager):
             self.disp.sync()
             
             self.hwnd_container = window.id
+            self._container_size = (int(w), int(h))
+            self._pending_container_size = None
             logger.info(f"Created X11 Container Window: {window.id}")
             return window.id
         except Exception as e:
@@ -62,13 +72,37 @@ class X11DockManager(DockManager):
             return None
 
     def process_events(self):
-        """Consume X11 events to keep the container responsive"""
+        """Consume X11 events and track window-manager container resizes."""
         try:
             while self.disp.pending_events():
-                event = self.disp.next_event()
-                # We can handle specific events here if needed, e.g. ConfigureNotify
+                xevent = self.disp.next_event()
+                if (
+                    xevent.type == X.ConfigureNotify
+                    and self.hwnd_container
+                    and getattr(xevent.window, "id", xevent.window) == self.hwnd_container
+                    and xevent.width > 1
+                    and xevent.height > 1
+                ):
+                    self._pending_container_size = (
+                        int(xevent.width),
+                        int(xevent.height),
+                    )
+                    self._container_resize_deadline = (
+                        time.monotonic() + RESIZE_SETTLE_SECONDS
+                    )
+
+            if (
+                self._pending_container_size
+                and time.monotonic() >= self._container_resize_deadline
+            ):
+                self._container_size = self._pending_container_size
+                self._pending_container_size = None
         except Exception:
             pass
+
+    def get_container_size(self):
+        """Return the latest container client size without an X11 round trip."""
+        return self._container_size
 
 
     def _get_window_name(self, window):
@@ -173,13 +207,18 @@ class X11DockManager(DockManager):
 
     def sync_layout(self, tx, ty, bx, by, w1, h1, w2, h2, is_docked=True):
         """
-        Resize/Move windows.
+        Resize and move docked windows.
         """
         try:
             if self.hwnd_top:
                 try:
                     top_win = self.disp.create_resource_object('window', self.hwnd_top)
-                    top_win.configure(x=int(tx), y=int(ty), width=int(w1), height=int(h1))
+                    top_win.configure(
+                        x=int(tx),
+                        y=int(ty),
+                        width=int(w1),
+                        height=int(h1),
+                    )
                 except Xerror.BadWindow:
                     logger.debug("Top window no longer valid, clearing hwnd_top")
                     self.hwnd_top = None
@@ -187,15 +226,50 @@ class X11DockManager(DockManager):
             if self.hwnd_bottom:
                 try:
                     bot_win = self.disp.create_resource_object('window', self.hwnd_bottom)
-                    bot_win.configure(x=int(bx), y=int(by), width=int(w2), height=int(h2))
+                    bot_win.configure(
+                        x=int(bx),
+                        y=int(by),
+                        width=int(w2),
+                        height=int(h2),
+                    )
                 except Xerror.BadWindow:
                     logger.debug("Bottom window no longer valid, clearing hwnd_bottom")
                     self.hwnd_bottom = None
 
-            self.disp.flush()
+            self.disp.sync()
+            self._next_layout_check = time.monotonic() + LAYOUT_CHECK_SECONDS
 
         except Exception as e:
             logger.error(f"Error syncing layout: {e}")
+
+    def layout_matches(self, tx, ty, bx, by, w1, h1, w2, h2):
+        """Periodically detect SDL or XWayland overriding child geometry."""
+        now = time.monotonic()
+        if now < self._next_layout_check:
+            return True
+        self._next_layout_check = now + LAYOUT_CHECK_SECONDS
+
+        expected = (
+            (self.hwnd_top, tx, ty, w1, h1),
+            (self.hwnd_bottom, bx, by, w2, h2),
+        )
+        try:
+            for window_id, x, y, width, height in expected:
+                if not window_id:
+                    continue
+                win = self.disp.create_resource_object('window', window_id)
+                geom = win.get_geometry()
+                actual = (geom.x, geom.y, geom.width, geom.height)
+                requested = (int(x), int(y), int(width), int(height))
+                if actual != requested:
+                    logger.debug(
+                        f"Window {window_id} geometry drifted: "
+                        f"{actual} != {requested}"
+                    )
+                    return False
+        except Xerror.BadWindow:
+            return False
+        return True
 
     def resize_container(self, container_id, w, h):
         """Resize the container window."""
@@ -203,6 +277,8 @@ class X11DockManager(DockManager):
             win = self.disp.create_resource_object('window', container_id)
             win.configure(width=int(w), height=int(h))
             self.disp.sync()
+            self._container_size = (int(w), int(h))
+            self._pending_container_size = None
         except Exception as e:
             logger.error(f"Error resizing container: {e}")
 
@@ -212,6 +288,8 @@ class X11DockManager(DockManager):
             win = self.disp.create_resource_object('window', container_id)
             win.destroy()
             self.disp.sync()
+            self._container_size = None
+            self._pending_container_size = None
             logger.info(f"Destroyed container window {container_id}")
         except Exception as e:
             logger.error(f"Error destroying container: {e}")

@@ -21,6 +21,7 @@ from src.config import ConfigManager
 from src.custom_profile_store import CustomProfileStore
 from src.device_profile import BUILTIN_PROFILES
 from src.device_selector import show_device_selector
+from src.layout import fit_layout_to_container, layout_size
 
 # Platform specific imports
 if sys.platform == "win32":
@@ -235,18 +236,17 @@ class Launcher:
         w1, h1 = self.scrcpy.f_w1, self.scrcpy.f_h1
         w2, h2 = self.scrcpy.f_w2, self.scrcpy.f_h2
         
-        target_w = 0
-        target_h = 0
-        
         if self.layout_mode == LayoutMode.DUAL:
-            target_w = max(w1, w2 + abs(self.bx))
-            target_h = h1 + h2
+            rects = (
+                (self.tx, self.ty, w1, h1),
+                (self.bx, self.by, w2, h2),
+            )
         elif self.layout_mode == LayoutMode.TOP:
-            target_w = w1
-            target_h = h1
-        elif self.layout_mode == LayoutMode.BOTTOM:
-            target_w = w2
-            target_h = h2
+            rects = ((0, 0, w1, h1),)
+        else:
+            rects = ((0, 0, w2, h2),)
+
+        target_w, target_h = layout_size(rects)
             
         logger.debug(f"Resizing container to {target_w}x{target_h} for mode {self.layout_mode}")
         
@@ -305,19 +305,17 @@ class Launcher:
             if not self.running:
                 return
 
-        # Calculate container size to fit both stacked windows
-        client_w = max(self.scrcpy.f_w1, self.scrcpy.f_w2 + abs(self.bx))
-        client_h = self.scrcpy.f_h1 + self.scrcpy.f_h2
-        
-        # Check initial layout mode if we want to start in a specific mode, 
-        # but defaulting to dual calculations for "max" size usually safer? 
-        # Actually better to respect the mode from start.
-        if self.layout_mode == LayoutMode.TOP:
-            client_w = self.scrcpy.f_w1
-            client_h = self.scrcpy.f_h1
-        elif self.layout_mode == LayoutMode.BOTTOM:
-             client_w = self.scrcpy.f_w2
-             client_h = self.scrcpy.f_h2
+        if self.layout_mode == LayoutMode.DUAL:
+            rects = (
+                (self.tx, self.ty, self.scrcpy.f_w1, self.scrcpy.f_h1),
+                (self.bx, self.by, self.scrcpy.f_w2, self.scrcpy.f_h2),
+            )
+        elif self.layout_mode == LayoutMode.TOP:
+            rects = ((0, 0, self.scrcpy.f_w1, self.scrcpy.f_h1),)
+        else:
+            rects = ((0, 0, self.scrcpy.f_w2, self.scrcpy.f_h2),)
+
+        client_w, client_h = layout_size(rects)
 
         # Destroy the previous container if one exists (e.g. after reconnect)
         if self.hwnd_container:
@@ -567,18 +565,34 @@ class Launcher:
         if not (self.docked and (self.dock.hwnd_top or self.dock.hwnd_bottom)):
             return
         if self.layout_mode == LayoutMode.TOP:
-            sp = (0, 0, 0, 0,
-                  self.scrcpy.f_w1, self.scrcpy.f_h1,
-                  self.scrcpy.f_w1, self.scrcpy.f_h1)
+            rects = (
+                (0, 0, self.scrcpy.f_w1, self.scrcpy.f_h1),
+                (0, 0, self.scrcpy.f_w1, self.scrcpy.f_h1),
+            )
         elif self.layout_mode == LayoutMode.BOTTOM:
-            sp = (0, 0, 0, 0,
-                  self.scrcpy.f_w2, self.scrcpy.f_h2,
-                  self.scrcpy.f_w2, self.scrcpy.f_h2)
+            rects = (
+                (0, 0, self.scrcpy.f_w2, self.scrcpy.f_h2),
+                (0, 0, self.scrcpy.f_w2, self.scrcpy.f_h2),
+            )
         else:
-            sp = (self.tx, self.ty, self.bx, self.by,
-                  self.scrcpy.f_w1, self.scrcpy.f_h1,
-                  self.scrcpy.f_w2, self.scrcpy.f_h2)
-        if sp != self._last_sync_params:
+            rects = (
+                (self.tx, self.ty, self.scrcpy.f_w1, self.scrcpy.f_h1),
+                (self.bx, self.by, self.scrcpy.f_w2, self.scrcpy.f_h2),
+            )
+
+        container_size = self.dock.get_container_size()
+        if container_size:
+            rects = fit_layout_to_container(rects, *container_size)
+
+        top, bottom = rects
+        sp = (
+            top[0], top[1], bottom[0], bottom[1],
+            top[2], top[3], bottom[2], bottom[3],
+        )
+        if (
+            sp != self._last_sync_params
+            or not self.dock.layout_matches(*sp)
+        ):
             self.dock.sync_layout(*sp, is_docked=True)
             self._last_sync_params = sp
 
