@@ -91,3 +91,14 @@ class DockManager(ABC):
         or None if unavailable. Default None — override where supported.
         """
         return None
+
+    def get_container_size(self):
+        """
+        Return the latest container client size, or None when resize tracking
+        is unavailable.
+        """
+        return None
+
+    def layout_matches(self, tx, ty, bx, by, w1, h1, w2, h2):
+        """Return whether docked windows still match the requested geometry."""
+        return True

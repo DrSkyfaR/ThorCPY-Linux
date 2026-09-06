@@ -74,6 +74,13 @@ See the full [CHANGELOG](CHANGELOG.md) for details.
   plus a network scanner that auto-discovers devices on your subnet
 - **X11 docking** — embed both screens into one container window, or undock them into
   independent, resizable, title-barred windows for individual capture (e.g. streaming)
+- Tiling-aware docked layout — when the window manager enlarges the container,
+  both screens scale together while preserving their relative size and position,
+  centering only along an axis with spare space; resize bursts are debounced to
+  keep embedded renderers stable
+- Docked child geometry is monitored and repaired after SDL/XWayland overrides
+- Software rendering under XWayland avoids GLX child-surface corruption during
+  compositor layout changes; native X11 and Windows retain OpenGL rendering
 - **Wayland support** — floating window mode via XWayland (docking not possible on pure Wayland)
 - Layout presets to position the screens precisely how you want
 - Screenshot capture grabs both screens together (saved as a PNG via `mss`)
